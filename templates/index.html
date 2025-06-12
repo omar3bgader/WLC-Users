@@ -262,11 +262,75 @@
       display: none;
     }
 
-    #floor-map-canvas {
+    .map-viewport {
+      position: relative;
       width: 100%;
+      height: 600px;
       border-radius: 12px;
+      overflow: hidden;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-      cursor: crosshair;
+      cursor: grab;
+      background: #f8f9fa;
+    }
+
+    .map-viewport:active {
+      cursor: grabbing;
+    }
+
+    #floor-map-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+      transition: transform 0.1s ease-out;
+    }
+
+    .zoom-controls {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      z-index: 10;
+    }
+
+    .zoom-btn {
+      width: 40px;
+      height: 40px;
+      background: rgba(255, 255, 255, 0.95);
+      border: 2px solid #e1e5e9;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #667eea;
+      transition: all 0.2s ease;
+      backdrop-filter: blur(10px);
+      user-select: none;
+    }
+
+    .zoom-btn:hover {
+      background: rgba(102, 126, 234, 0.1);
+      border-color: #667eea;
+      transform: scale(1.05);
+    }
+
+    .zoom-indicator {
+      position: absolute;
+      bottom: 15px;
+      right: 15px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #667eea;
+      border: 2px solid #e1e5e9;
     }
 
     #ap-tooltip {
@@ -346,6 +410,14 @@
       background: #007bff;
     }
 
+    .map-instructions {
+      font-size: 0.85rem;
+      color: #666;
+      margin-top: 10px;
+      text-align: center;
+      font-style: italic;
+    }
+
     @media (max-width: 768px) {
       .container {
         padding: 15px;
@@ -376,6 +448,15 @@
       th, td {
         padding: 12px 8px;
       }
+
+      .map-viewport {
+        height: 400px;
+      }
+
+      .legend {
+        flex-wrap: wrap;
+        gap: 10px;
+      }
     }
   </style>
 </head>
@@ -402,17 +483,6 @@
       </div>
     </div>
 
-    <div class="stats-bar">
-      <div class="stat-card">
-        <h3>Connected Devices</h3>
-        <div class="value loading" id="device-count">Loading...</div>
-      </div>
-      <div class="stat-card">
-        <h3>Last Updated</h3>
-        <div class="value" id="last-updated">--</div>
-      </div>
-    </div>
-
     <div id="result" class="result-section">
       <div id="location-details"></div>
     </div>
@@ -431,8 +501,30 @@
           </div>
         </div>
       </div>
-      <canvas id="floor-map-canvas"></canvas>
+      <div class="map-viewport" id="map-viewport">
+        <canvas id="floor-map-canvas"></canvas>
+        <div class="zoom-controls">
+          <div class="zoom-btn" onclick="zoomIn()">+</div>
+          <div class="zoom-btn" onclick="zoomOut()">−</div>
+          <div class="zoom-btn" onclick="resetZoom()">⌂</div>
+        </div>
+        <div class="zoom-indicator" id="zoom-indicator">100%</div>
+      </div>
+      <div class="map-instructions">
+        Use mouse wheel to zoom • Click and drag to pan • Use controls to zoom and reset view
+      </div>
       <div id="ap-tooltip"></div>
+    </div>
+
+    <div class="stats-bar">
+      <div class="stat-card">
+        <h3>Connected Devices</h3>
+        <div class="value loading" id="device-count">Loading...</div>
+      </div>
+      <div class="stat-card">
+        <h3>Last Updated</h3>
+        <div class="value" id="last-updated">--</div>
+      </div>
     </div>
 
     <div class="table-container">
@@ -477,6 +569,19 @@
     let dims = {};
     let currentSort = { column: null, ascending: true };
 
+    // Map zoom and pan state
+    let mapState = {
+      scale: 1,
+      translateX: 0,
+      translateY: 0,
+      isDragging: false,
+      lastX: 0,
+      lastY: 0,
+      minScale: 0.1,
+      maxScale: 5,
+      points: []
+    };
+
     // Enhanced search functionality
     document.getElementById('search-input').addEventListener('keypress', function(e) {
       if (e.key === 'Enter') {
@@ -492,7 +597,7 @@
                 mp = document.getElementById('map-preview');
           data.forEach(f => {
             floorList.push(f);
-            ff.add(new Option(f.label, f.code));  // Use f.code instead of f.id
+            ff.add(new Option(f.label, f.code));
             mp.add(new Option(f.label, f.code));
           });
         })
@@ -528,7 +633,6 @@
               </tr>
             `).join('');
 
-            // Add click handlers
             document.querySelectorAll('.clickable-row').forEach(r => {
               r.onclick = () => {
                 const user = r.dataset.user;
@@ -540,7 +644,6 @@
             });
           }
 
-          // Update stats
           deviceCountEl.className = 'value';
           deviceCountEl.textContent = filtered.length;
           document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
@@ -622,10 +725,44 @@
       fetchFloorMap(floorId, null);
     }
 
+    // Zoom and pan functions
+    function updateTransform() {
+      const canvas = document.getElementById('floor-map-canvas');
+      canvas.style.transform = `translate(${mapState.translateX}px, ${mapState.translateY}px) scale(${mapState.scale})`;
+      document.getElementById('zoom-indicator').textContent = Math.round(mapState.scale * 100) + '%';
+    }
+
+    function zoomIn() {
+      mapState.scale = Math.min(mapState.scale * 1.5, mapState.maxScale);
+      updateTransform();
+    }
+
+    function zoomOut() {
+      mapState.scale = Math.max(mapState.scale / 1.5, mapState.minScale);
+      updateTransform();
+    }
+
+    function resetZoom() {
+      mapState.scale = 1;
+      mapState.translateX = 0;
+      mapState.translateY = 0;
+      updateTransform();
+    }
+
+    function getMousePos(e) {
+      const viewport = document.getElementById('map-viewport');
+      const rect = viewport.getBoundingClientRect();
+      return {
+        x: (e.clientX - rect.left - mapState.translateX) / mapState.scale,
+        y: (e.clientY - rect.top - mapState.translateY) / mapState.scale
+      };
+    }
+
     function renderMap({ image_url, aps }) {
       const cvs = document.getElementById('floor-map-canvas'),
             ctx = cvs.getContext('2d'),
             tip = document.getElementById('ap-tooltip'),
+            viewport = document.getElementById('map-viewport'),
             bg = new Image();
 
       bg.onload = () => {
@@ -636,7 +773,7 @@
         const sx = cvs.width / (dims.width || 1),
               sy = cvs.height / (dims.length || 1);
 
-        const points = [];
+        mapState.points = [];
         aps.forEach(ap => {
           if (ap.x == null || ap.y == null) return;
           const x = ap.x * sx, y = ap.y * sy, r = ap.is_target ? 10 : 6;
@@ -665,32 +802,110 @@
             ctx.stroke();
           }
 
-          points.push({ name: ap.name, x, y, r: r + 5, is_target: ap.is_target });
+          mapState.points.push({ name: ap.name, x, y, r: r + 5, is_target: ap.is_target });
         });
 
+        // Reset zoom and show map
+        resetZoom();
         document.getElementById('map-container').style.display = 'block';
 
-        cvs.onmousemove = e => {
-          const rect = cvs.getBoundingClientRect(),
-                mx = e.clientX - rect.left,
-                my = e.clientY - rect.top;
-          let found = false;
+        // Mouse wheel zoom
+        viewport.onwheel = e => {
+          e.preventDefault();
+          const mousePos = getMousePos(e);
+          const delta = e.deltaY > 0 ? 0.9 : 1.1;
+          const newScale = Math.max(mapState.minScale, Math.min(mapState.maxScale, mapState.scale * delta));
 
-          for (let p of points) {
-            if (Math.hypot(mx - p.x, my - p.y) < p.r) {
-              tip.style.display = 'block';
-              tip.innerHTML = `<strong>${p.name}</strong>${p.is_target ? ' (Target)' : ''}`;
-              tip.style.left = `${e.clientX + 10}px`;
-              tip.style.top = `${e.clientY - 40}px`;
-              found = true;
-              break;
-            }
+          if (newScale !== mapState.scale) {
+            const scaleDiff = newScale - mapState.scale;
+            mapState.translateX -= mousePos.x * scaleDiff;
+            mapState.translateY -= mousePos.y * scaleDiff;
+            mapState.scale = newScale;
+            updateTransform();
           }
-          if (!found) tip.style.display = 'none';
         };
 
-        cvs.onmouseleave = () => {
+        // Mouse drag pan
+        viewport.onmousedown = e => {
+          if (e.target === cvs || e.target === viewport) {
+            mapState.isDragging = true;
+            mapState.lastX = e.clientX;
+            mapState.lastY = e.clientY;
+            viewport.style.cursor = 'grabbing';
+            e.preventDefault();
+          }
+        };
+
+        document.onmousemove = e => {
+          if (mapState.isDragging) {
+            const deltaX = e.clientX - mapState.lastX;
+            const deltaY = e.clientY - mapState.lastY;
+            mapState.translateX += deltaX;
+            mapState.translateY += deltaY;
+            mapState.lastX = e.clientX;
+            mapState.lastY = e.clientY;
+            updateTransform();
+          } else {
+            // Handle tooltip
+            const rect = viewport.getBoundingClientRect();
+            if (e.clientX >= rect.left && e.clientX <= rect.right &&
+                e.clientY >= rect.top && e.clientY <= rect.bottom) {
+              const mousePos = getMousePos(e);
+              let found = false;
+
+              for (let p of mapState.points) {
+                if (Math.hypot(mousePos.x - p.x, mousePos.y - p.y) < p.r) {
+                  tip.style.display = 'block';
+                  tip.innerHTML = `<strong>${p.name}</strong>${p.is_target ? ' (Target)' : ''}`;
+                  tip.style.left = `${e.clientX + 10}px`;
+                  tip.style.top = `${e.clientY - 40}px`;
+                  found = true;
+                  break;
+                }
+              }
+              if (!found) tip.style.display = 'none';
+            } else {
+              tip.style.display = 'none';
+            }
+          }
+        };
+
+        document.onmouseup = () => {
+          if (mapState.isDragging) {
+            mapState.isDragging = false;
+            viewport.style.cursor = 'grab';
+          }
+        };
+
+        viewport.onmouseleave = () => {
           tip.style.display = 'none';
+        };
+
+        // Touch support for mobile
+        viewport.ontouchstart = e => {
+          if (e.touches.length === 1) {
+            mapState.isDragging = true;
+            mapState.lastX = e.touches[0].clientX;
+            mapState.lastY = e.touches[0].clientY;
+            e.preventDefault();
+          }
+        };
+
+        viewport.ontouchmove = e => {
+          if (mapState.isDragging && e.touches.length === 1) {
+            const deltaX = e.touches[0].clientX - mapState.lastX;
+            const deltaY = e.touches[0].clientY - mapState.lastY;
+            mapState.translateX += deltaX;
+            mapState.translateY += deltaY;
+            mapState.lastX = e.touches[0].clientX;
+            mapState.lastY = e.touches[0].clientY;
+            updateTransform();
+            e.preventDefault();
+          }
+        };
+
+        viewport.ontouchend = () => {
+          mapState.isDragging = false;
         };
       };
 
@@ -725,7 +940,6 @@
 
         // Update sort indicators
         document.querySelectorAll('#clients-table th').forEach((header, idx) => {
-          const indicator = header.querySelector('::after') || header;
           if (idx === i) {
             header.style.background = 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)';
           } else {
