@@ -1,1 +1,26 @@
+# virtualenv
+.venv/
+venv/
+
+# Python caches and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# env vars / secrets
 .env
+
+# IDE settings
+.idea/
+.vscode/
+
+# distribution / build
+build/
+dist/
+*.egg-info/
+
+# logs
+*.log
+
+# OS files
+.DS_Store
