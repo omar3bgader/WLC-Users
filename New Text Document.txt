@@ -22,8 +22,8 @@ server {
     }
 
     location / {
-        proxy_pass http://app_socket;
         include proxy_params;
+	proxy_pass http://unix:/home/wlc-webserver/webserver/webserver.sock:/;
     }
 }
 EOF
