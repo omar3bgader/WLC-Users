@@ -1,0 +1,29 @@
+sudo tee /etc/nginx/sites-available/webserver <<'EOF'
+# Redirect all HTTP→HTTPS
+server {
+    listen 80;
+    server_name 10.10.16.110;
+
+    # NO backslashes here – use raw $host and $request_uri
+    return 301 https://\$host\$request_uri;
+}
+
+# Serve the app over HTTPS
+server {
+    listen 443 ssl http2;
+    server_name 10.10.16.110;
+
+    ssl_certificate     /etc/ssl/certs/webserver.crt;
+    ssl_certificate_key /etc/ssl/private/webserver.key;
+
+    # define an upstream for the Unix socket
+    upstream app_socket {
+        server unix:/home/wlc-webserver/webserver/webserver.sock;
+    }
+
+    location / {
+        proxy_pass http://app_socket;
+        include proxy_params;
+    }
+}
+EOF
